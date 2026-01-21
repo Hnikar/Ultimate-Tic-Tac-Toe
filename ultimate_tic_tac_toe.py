@@ -1,153 +1,248 @@
 from __future__ import annotations
 import sys
 import enum
-from typing import Union
+import time
+from typing import List, Tuple, Optional, Union
 from dataclasses import dataclass
-
 
 @dataclass(frozen=True)
 class Config:
     BOARD_SIZE: int = 3
-    WIN_REWARD: float = 1.0
-    DRAW_REWARD: float = 0.0
-    MAX_DEPTH: int = 2
-
-
-class UltimateBoard:
-
-    def __init__(self) -> None:
-        self.board: list[list[GameBoard]] = [
-            [GameBoard() for _ in range(Config.BOARD_SIZE)] for _ in range(Config.BOARD_SIZE)
-        ]
-        self.next_board: tuple[int, int] | None = None
-
-    def possible_moves(self) -> list[tuple[int, int]]:
-        if self.next_board is not None and not self.board[self.next_board[0]][self.next_board[1]].finished():
-            row, col = self.next_board
-            moves: list[tuple[int, int]] = self.board[row][col].possible_moves()
-            return [
-                (row * Config.BOARD_SIZE + r, col * Config.BOARD_SIZE + c) for r, c in moves
-            ]
-
-        all_moves: list[tuple[int, int]] = []
-        for row in range(Config.BOARD_SIZE):
-            for col in range(Config.BOARD_SIZE):
-                moves: list[tuple[int, int]] = self.board[row][col].possible_moves()
-                moves_converted: list[tuple[int, int]] = [
-                    (row * Config.BOARD_SIZE + r, col * Config.BOARD_SIZE + c) for r, c in moves
-                ]
-                all_moves += moves_converted
-        return all_moves
-
-    def win(self, player: Player) -> bool:
-        return any(
-            all(self.board[i][j].win(player) for j in range(Config.BOARD_SIZE)) or
-            all(self.board[j][i].win(player) for j in range(Config.BOARD_SIZE))
-            for i in range(Config.BOARD_SIZE)
-        ) or all(self.board[i][i].win(player) for i in range(Config.BOARD_SIZE)) or all(self.board[i][2 - i].win(player) for i in range(Config.BOARD_SIZE))
-
-    def draw(self) -> bool:
-        return not self.win(Player.PLAYER) and not self.win(Player.OPPONENT) and not self.possible_moves()
-
-    def make_move(self, row: int, col: int, player: Player) -> None:
-        board_row: int = int(row / 3)
-        small_board_row: int = row % 3
-        board_col: int = int(col / 3)
-        small_board_col: int = col % 3
-        self.board[board_row][board_col].make_move(small_board_row, small_board_col, player)
-        self.next_board = (small_board_row, small_board_col)
-
-    def set_empty(self, row: int, col: int) -> None:
-        board_row: int = int(row / 3)
-        small_board_row: int = row % 3
-        board_col: int = int(col / 3)
-        small_board_col: int = col % 3
-        self.board[board_row][board_col].set_empty(small_board_row, small_board_col)
-
+    TIME_LIMIT: float = 0.095
+    WIN_REWARD: float = 10000.0
+    SMALL_WIN_REWARD: float = 100.0
 
 class Player(enum.Enum):
-    OPPONENT = enum.auto()
-    PLAYER = enum.auto()
+    OPPONENT = -1
+    NONE = 0
+    PLAYER = 1
 
+    @property
     def opponent(self) -> Player:
-        return Player.OPPONENT if self == Player.PLAYER else Player.PLAYER
-
+        if self == Player.PLAYER: return Player.OPPONENT
+        if self == Player.OPPONENT: return Player.PLAYER
+        return Player.NONE
 
 class Cell(enum.Enum):
-    EMPTY = enum.auto()
+    EMPTY = 0
 
-
-CellState = Union[Cell, Player]
-
+CellState = Union[int, Player]
 
 class GameBoard:
     def __init__(self) -> None:
-        self.board: list[list[CellState]] = [
-            [Cell.EMPTY for _ in range(Config.BOARD_SIZE)] for _ in range(Config.BOARD_SIZE)
-        ]
-
-    def possible_moves(self) -> list[tuple[int, int]]:
-        if self.win(Player.OPPONENT) or self.win(Player.PLAYER):
-            return []
-        return [
-            (r, c)
-            for r in range(Config.BOARD_SIZE)
-            for c in range(Config.BOARD_SIZE)
-            if self.board[r][c] == Cell.EMPTY
-        ]
-
-    def win(self, player: Player) -> bool:
-        return any(
-            all(self.board[i][j] == player for j in range(Config.BOARD_SIZE)) or
-            all(self.board[j][i] == player for j in range(Config.BOARD_SIZE))
-            for i in range(Config.BOARD_SIZE)
-        ) or all(self.board[i][i] == player for i in range(Config.BOARD_SIZE)) or all(self.board[i][2 - i] == player for i in range(Config.BOARD_SIZE))
-
-    def draw(self) -> bool:
-        return not self.win(Player.PLAYER) and not self.win(Player.OPPONENT) and not self.possible_moves()
-    
-    def finished(self) -> bool:
-        return self.win(Player.PLAYER) or self.win(Player.OPPONENT) or self.draw()
+        self.board: List[List[int]] = [[0] * 3 for _ in range(3)]
+        self.winner: Player = Player.NONE
+        self.filled_count: int = 0
 
     def make_move(self, row: int, col: int, player: Player) -> None:
-        if self.board[row][col] != Cell.EMPTY:
-            raise ValueError("Cell is already taken")
-        self.board[row][col] = player
+        if self.board[row][col] == 0:
+            self.board[row][col] = player.value
+            self.filled_count += 1
+            self.update_winner(row, col, player)
 
-    def set_empty(self, row: int, col: int) -> None:
-        self.board[row][col] = Cell.EMPTY
+    def undo_move(self, row: int, col: int) -> None:
+        self.board[row][col] = 0
+        self.filled_count -= 1
+        self.winner = Player.NONE
 
+    def update_winner(self, last_r: int, last_c: int, player: Player) -> None:
+        val = player.value
+        b = self.board
+        if (b[last_r][0] == val and b[last_r][1] == val and b[last_r][2] == val) or \
+           (b[0][last_c] == val and b[1][last_c] == val and b[2][last_c] == val):
+            self.winner = player
+            return
 
-def score(game_board: UltimateBoard) -> float:
-    return 0.0
+        if last_r == last_c:
+             if b[0][0] == val and b[1][1] == val and b[2][2] == val:
+                self.winner = player
+                return
+        
+        if last_r + last_c == 2:
+            if b[0][2] == val and b[1][1] == val and b[2][0] == val:
+                self.winner = player
+                return
 
+    def is_full(self) -> bool:
+        return self.filled_count == 9
 
-def minimax(game_board: UltimateBoard, player: Player, alpha: float, beta: float, depth: int) -> tuple[float, tuple[int, int] | None]:
-    pass
+class UltimateBoard:
+    def __init__(self) -> None:
+        self.board: List[List[GameBoard]] = [
+            [GameBoard() for _ in range(3)] for _ in range(3)
+        ]
+        self.next_board_coords: Tuple[int, int] = (-1, -1) 
 
+    def make_move(self, row: int, col: int, player: Player) -> None:
+        b_row, b_col = row // 3, col // 3
+        s_row, s_col = row % 3, col % 3
+        
+        self.board[b_row][b_col].make_move(s_row, s_col, player)
+        
+        target_board = self.board[s_row][s_col]
+        if target_board.winner != Player.NONE or target_board.is_full():
+            self.next_board_coords = (-1, -1)
+        else:
+            self.next_board_coords = (s_row, s_col)
+
+    def undo_move(self, row: int, col: int, prev_next_coords: Tuple[int, int]) -> None:
+        b_row, b_col = row // 3, col // 3
+        s_row, s_col = row % 3, col % 3
+        self.board[b_row][b_col].undo_move(s_row, s_col)
+        self.next_board_coords = prev_next_coords
+
+class AI:
+    def __init__(self):
+        self.start_time = 0.0
+
+    def evaluate(self, game: UltimateBoard) -> float:
+        score = 0.0
+        weights = [[1.5, 1.0, 1.5], [1.0, 2.0, 1.0], [1.5, 1.0, 1.5]] 
+        
+        for r in range(3):
+            for c in range(3):
+                sub = game.board[r][c]
+                if sub.winner == Player.PLAYER:
+                    score += Config.SMALL_WIN_REWARD * weights[r][c]
+                elif sub.winner == Player.OPPONENT:
+                    score -= Config.SMALL_WIN_REWARD * weights[r][c]
+                else:
+                    if sub.board[1][1] == Player.PLAYER.value:
+                        score += 2 * weights[r][c]
+                    elif sub.board[1][1] == Player.OPPONENT.value:
+                        score -= 2 * weights[r][c]
+        return score
+
+    def minimax(self, game: UltimateBoard, depth: int, alpha: float, beta: float, 
+                maximizing: bool, valid_moves_cache: Optional[List[Tuple[int, int]]] = None) -> float:
+        
+        if (depth % 2 == 0) and (time.time() - self.start_time > Config.TIME_LIMIT):
+            raise TimeoutError()
+
+        if depth == 0:
+            return self.evaluate(game)
+
+        moves = []
+        if valid_moves_cache:
+            moves = valid_moves_cache
+        else:
+            nb = game.next_board_coords
+            if nb == (-1, -1):
+                for br in range(3):
+                    for bc in range(3):
+                        if game.board[br][bc].winner == Player.NONE and not game.board[br][bc].is_full():
+                            for sr in range(3):
+                                for sc in range(3):
+                                    if game.board[br][bc].board[sr][sc] == 0:
+                                        moves.append((br*3 + sr, bc*3 + sc))
+            else:
+                br, bc = nb
+                for sr in range(3):
+                    for sc in range(3):
+                         if game.board[br][bc].board[sr][sc] == 0:
+                             moves.append((br*3 + sr, bc*3 + sc))
+
+        if not moves:
+            return self.evaluate(game)
+
+        prev_next_coords = game.next_board_coords
+
+        if maximizing:
+            max_eval = -float('inf')
+            for r, c in moves:
+                game.make_move(r, c, Player.PLAYER)
+                try:
+                    eval_val = self.minimax(game, depth - 1, alpha, beta, False)
+                finally:
+                    game.undo_move(r, c, prev_next_coords)
+                
+                max_eval = max(max_eval, eval_val)
+                alpha = max(alpha, eval_val)
+                if beta <= alpha: break
+            return max_eval
+        else:
+            min_eval = float('inf')
+            for r, c in moves:
+                game.make_move(r, c, Player.OPPONENT)
+                try:
+                    eval_val = self.minimax(game, depth - 1, alpha, beta, True)
+                finally:
+                    game.undo_move(r, c, prev_next_coords)
+                
+                min_eval = min(min_eval, eval_val)
+                beta = min(beta, eval_val)
+                if beta <= alpha: break
+            return min_eval
+
+    def get_best_move(self, game: UltimateBoard, valid_moves: List[Tuple[int, int]]) -> Tuple[int, int]:
+        self.start_time = time.time()
+        best_move = valid_moves[0] if valid_moves else (0, 0)
+        
+        valid_moves.sort(key=lambda m: 0 if (m[0]%3==1 and m[1]%3==1) else 1)
+
+        for depth in range(1, 10):
+            try:
+                current_best_move = None
+                max_eval = -float('inf')
+                alpha = -float('inf')
+                beta = float('inf')
+                
+                prev_next = game.next_board_coords
+
+                for r, c in valid_moves:
+                    game.make_move(r, c, Player.PLAYER)
+                    try:
+                        eval_val = self.minimax(game, depth, alpha, beta, False)
+                    finally:
+                        game.undo_move(r, c, prev_next)
+
+                    if eval_val > max_eval:
+                        max_eval = eval_val
+                        current_best_move = (r, c)
+                    
+                    alpha = max(alpha, eval_val)
+                    
+                    if time.time() - self.start_time > Config.TIME_LIMIT:
+                        raise TimeoutError()
+                
+                if current_best_move:
+                    best_move = current_best_move
+            
+            except TimeoutError:
+                break
+                
+        return best_move
 
 def game_loop() -> None:
-    game_board: UltimateBoard = UltimateBoard()
+    game_board = UltimateBoard()
+    ai = AI()
+
     while True:
-        opponent_row, opponent_col = [int(i) for i in input().split()]
-        valid_action_count = int(input())
+        try:
+            line = input().split()
+            if not line: break
+            opponent_row, opponent_col = map(int, line)
+            
+            valid_action_count = int(input())
+            valid_moves = []
+            for _ in range(valid_action_count):
+                valid_moves.append(tuple(map(int, input().split())))
+            
+            if opponent_row != -1:
+                try:
+                    game_board.make_move(opponent_row, opponent_col, Player.OPPONENT)
+                except Exception:
+                    pass
 
-        valid_moves: list[tuple[int, int]] = []
-        for _ in range(valid_action_count):
-            row, col = [int(j) for j in input().split()]
-            valid_moves.append((row, col))
+            move = ai.get_best_move(game_board, valid_moves)
+            
+            game_board.make_move(move[0], move[1], Player.PLAYER)
 
-        if opponent_row != -1:
-            game_board.make_move(opponent_row, opponent_col, Player.OPPONENT)
+            print(f"{move[0]} {move[1]}")
+            sys.stdout.flush()
 
-        reward, move = minimax(game_board, Player.PLAYER, -float("inf"), float("inf"), depth=Config.MAX_DEPTH)
-        print(str(reward) + ' ' + str(move), game_board.possible_moves(), game_board.next_board, file=sys.stderr, flush=True)
+        except EOFError:
+            break
 
-        row, col = move
-        game_board.make_move(row, col, Player.PLAYER)
-
-        print(str(row) + ' ' + str(col), file=sys.stderr, flush=True)
-        print(str(row) + ' ' + str(col))
-
-
-game_loop()
+if __name__ == "__main__":
+    game_loop()
